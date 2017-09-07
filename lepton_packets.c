@@ -50,6 +50,7 @@ static uint32_t speed = 16000000;
 static uint16_t delay;
 
 #define VOSPI_PACKET_SIZE (164)
+// XXX play around with this
 #define PACKETS_PER_READ (120)
 #define TRANSFER_SIZE (VOSPI_PACKET_SIZE * PACKETS_PER_READ)
 
@@ -59,20 +60,25 @@ static uint16_t delay;
 
 static int invalid = 0;
 static int invalid_pktnum = 0;
-static int last_packet_number = -1;
+static int last_pkt_num = -1;
 static int state = STATE_INVALID;
 static int last_state = -1;
 
+static int transfer_count = 0;
+static int last_good_count = 0;
 
 void transfer(int fd)
 {
     int ret;
     int i;
     unsigned int header;
-    int packet_number;
+    int pkt_num;
     uint8_t tx[TRANSFER_SIZE] = {0, };
     uint8_t rx[TRANSFER_SIZE] = {0, };
     uint8_t *packet;
+
+    transfer_count++;
+
     struct spi_ioc_transfer tr = {
         .tx_buf = (unsigned long)tx,
         .rx_buf = (unsigned long)rx,
@@ -90,28 +96,32 @@ void transfer(int fd)
     for (i = 0; i < PACKETS_PER_READ; i++) {
 	packet = &rx[i * VOSPI_PACKET_SIZE];
 	header = packet[1] | packet[0] << 8;
+
+	/* XXX if first bit of buffer is set, trigger a reset */
     
 	if ((header & 0x0F00) == 0x0F00) {
 	    state = STATE_INVALID;
 	    invalid++;
 	} else {
-	    packet_number = header & 0x0FFF;
-	    if (packet_number > 62) {
+	    pkt_num = header & 0x0FFF;
+	    if (pkt_num > 62) {
 		state = STATE_INVALID_PKTNUM;
 		invalid_pktnum++;
 	    } else {
 		state = STATE_VALID;
-		if (packet_number == 20) {
-		    printf("p 20: %02x\n", packet[0]);
+		/* XXX figure out how to get the damn segment out
+		if (pkt_num == 20) {
+		    printf("p %d: %d\n", pkt_num, (header & 0xF000) >> 12);
 		}
+		*/
 	    }
 	}
 
 	if (state != last_state) {
 	    switch (last_state) {
 	    case STATE_VALID:
-		printf("saw packets: 0-%d\n", last_packet_number);
-		last_packet_number = -1;
+		printf("saw packets: 0-%d\n", last_pkt_num);
+		last_pkt_num = -1;
 		break;
 	    case STATE_INVALID:
 		printf("invalid: %d\n", invalid);
@@ -126,23 +136,23 @@ void transfer(int fd)
 	}
 
 	if (state == STATE_VALID) {
-	    if (packet_number != last_packet_number+1) {
-		if (last_packet_number != -1) {
-		    printf("saw packets: 0-%d\n", last_packet_number);
+	    if (pkt_num != last_pkt_num+1) {
+		if (last_pkt_num != -1) {
+		    printf("saw packets: 0-%d\n", last_pkt_num);
 		}
 	    }
-	    last_packet_number = packet_number;
+	    last_pkt_num = pkt_num;
 	}
+    }
+
+    if (state == STATE_VALID) {
+	last_good_count = transfer_count;
     }
 }
 
-int main(int argc, char *argv[])
-{
-    int ret = 0;
-    int fd;
-    int i;
 
-
+int spi_init() {
+    int fd, ret;
     fd = open(device, O_RDWR);
     if (fd < 0)
     {
@@ -190,14 +200,32 @@ int main(int argc, char *argv[])
     printf("max speed: %d Hz (%d KHz)\n", speed, speed/1000);
     printf("size per read: %d\n", TRANSFER_SIZE);
 
-    /* /\* XXX force a reset? *\/ */
-    /* sleep(1); */
+    return fd;
+}
 
-    for (i = 0; i < 5000; i++) {
+int reset(int fd) {
+    close(fd);
+    transfer_count = 0;
+    last_good_count = 0;
+    // XXX 1s is overkill, should be able to a lot less
+    sleep(1);
+    return spi_init();
+}
+
+int main(int argc, char *argv[])
+{
+    int fd = spi_init();
+
+    while (1 == 1) {
         transfer(fd);
+
+	// XXX this doesn't reset soon enough - probably needs to be
+	// part of the transfer code
+	if ((transfer_count - last_good_count) > 2) {
+	    fd = reset(fd);
+	}
     }
 
     close(fd);
-
-    return ret;
+    return 0;
 }
