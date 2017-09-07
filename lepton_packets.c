@@ -145,6 +145,7 @@ void transfer(int fd)
 	}
     }
 
+    // XXX this isn't right - it's perfectly ok for the state not to be valid at exit
     if (state == STATE_VALID) {
 	last_good_count = transfer_count;
     }
