@@ -67,13 +67,14 @@ static int last_state = -1;
 static int transfer_count = 0;
 static int last_good_count = 0;
 
+static uint8_t tx[TRANSFER_SIZE] = {0, };
+
 void transfer(int fd)
 {
     int ret;
     int i;
     unsigned int header;
     int pkt_num;
-    uint8_t tx[TRANSFER_SIZE] = {0, };
     uint8_t rx[TRANSFER_SIZE] = {0, };
     uint8_t *packet;
 
@@ -109,11 +110,9 @@ void transfer(int fd)
 		invalid_pktnum++;
 	    } else {
 		state = STATE_VALID;
-		/* XXX figure out how to get the damn segment out
 		if (pkt_num == 20) {
-		    printf("p %d: %d\n", pkt_num, (header & 0xF000) >> 12);
+		    printf("p %d: %d\n", pkt_num, packet[0] >> 4);
 		}
-		*/
 	    }
 	}
 
