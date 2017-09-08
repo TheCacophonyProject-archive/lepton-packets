@@ -37,6 +37,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
+// XXX timestamp outputs to get a better idea of what's happening
+
 static void pabort(const char *s)
 {
     perror(s);
@@ -69,7 +71,7 @@ static int last_good_count = 0;
 
 static uint8_t tx[TRANSFER_SIZE] = {0, };
 
-void transfer(int fd)
+int transfer(int fd)
 {
     int ret;
     int i;
@@ -105,9 +107,10 @@ void transfer(int fd)
 	    invalid++;
 	} else {
 	    pkt_num = header & 0x0FFF;
-	    if (pkt_num > 62) {
+	    if (pkt_num > 60) {
 		state = STATE_INVALID_PKTNUM;
 		invalid_pktnum++;
+		return 1;
 	    } else {
 		state = STATE_VALID;
 		if (pkt_num == 20) {
@@ -139,15 +142,13 @@ void transfer(int fd)
 		if (last_pkt_num != -1) {
 		    printf("saw packets: 0-%d\n", last_pkt_num);
 		}
+	        return 1;
 	    }
 	    last_pkt_num = pkt_num;
 	}
     }
 
-    // XXX this isn't right - it's perfectly ok for the state not to be valid at exit
-    if (state == STATE_VALID) {
-	last_good_count = transfer_count;
-    }
+    return 0;
 }
 
 
@@ -205,24 +206,28 @@ int spi_init() {
 
 int reset(int fd) {
     close(fd);
+
+    invalid = 0;
+    invalid_pktnum = 0;
+    last_pkt_num = -1;
+    state = STATE_INVALID;
+    last_state = -1;
     transfer_count = 0;
     last_good_count = 0;
-    // XXX 1s is overkill, should be able to a lot less
-    sleep(1);
+
+    usleep(200 * 1000); // 200ms
     return spi_init();
 }
 
 int main(int argc, char *argv[])
 {
     int fd = spi_init();
+    int need_reset;
 
     while (1 == 1) {
-        transfer(fd);
-
-	// XXX this doesn't reset soon enough - probably needs to be
-	// part of the transfer code
-	if ((transfer_count - last_good_count) > 2) {
-	    fd = reset(fd);
+	need_reset = transfer(fd);
+	if (need_reset) {
+	    reset(fd);
 	}
     }
 
