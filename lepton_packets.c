@@ -39,8 +39,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-// XXX timestamp outputs to get a better idea of what's happening
-
 static void pabort(const char *s)
 {
     perror(s);
@@ -50,7 +48,7 @@ static void pabort(const char *s)
 static const char *device = "/dev/spidev0.0";
 static uint8_t mode = 3;
 static uint8_t bits = 8; // XXX get the driver to do the work by setting to 16
-static uint32_t speed = 16000000;
+static uint32_t speed = 20000000;
 static uint16_t delay;
 
 #define VOSPI_PACKET_SIZE (164)
@@ -165,7 +163,11 @@ int transfer(int fd)
             if (pkt_num == 0 && last_pkt_num == 0) {
                 // XXX end of read?
                 debug("saw pkt 0 twice (%02x %02x %02x %02x)", packet[0], packet[1], packet[2], packet[3]);
-                return 0;
+                return 1;
+            }
+            if (pkt_num == last_pkt_num) {
+                debug("dup pkt %d", pkt_num);
+                return 1;
             }
             if (!is_valid_seq(last_pkt_num, pkt_num)) {
                 if (last_pkt_num != -1) {
