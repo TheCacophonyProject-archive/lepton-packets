@@ -48,26 +48,21 @@ static void pabort(const char *s)
 static const char *device = "/dev/spidev0.0";
 static uint8_t mode = 3;
 static uint8_t bits = 8; // XXX get the driver to do the work by setting to 16
-static uint32_t speed = 20000000;
+static uint32_t speed = 30000000;
 static uint16_t delay;
 
 #define VOSPI_PACKET_SIZE (164)
 // XXX play around with this
-#define PACKETS_PER_READ (120)
+#define PACKETS_PER_READ (200)
 #define TRANSFER_SIZE (VOSPI_PACKET_SIZE * PACKETS_PER_READ)
 
 #define STATE_VALID (0)
 #define STATE_INVALID (1)
-#define STATE_INVALID_PKTNUM (2)
 
-static int invalid = 0;
-static int invalid_pktnum = 0;
 static int last_pkt_num = -1;
 static int state = STATE_INVALID;
 static int last_state = -1;
-
-static int transfer_count = 0;
-static int last_good_count = 0;
+static int invalid = 0;
 
 static uint8_t tx[TRANSFER_SIZE] = {0, };
 
@@ -83,7 +78,7 @@ void debug(char *fmt, ...) {
 }
 
 int is_valid_seq(int prev, int now) {
-    if (now == 0 && prev == 60) {
+    if (now == 0 && prev == 59) {
         return 1;
     }
     if (now == prev + 1) {
@@ -101,8 +96,9 @@ int transfer(int fd)
     uint8_t rx[TRANSFER_SIZE] = {0, };
     uint8_t *packet;
 
-    transfer_count++;
+    debug("--- transfer ---");
 
+    // XXX what is cs_change in this?
     struct spi_ioc_transfer tr = {
         .tx_buf = (unsigned long)tx,
         .rx_buf = (unsigned long)rx,
@@ -121,17 +117,17 @@ int transfer(int fd)
         packet = &rx[i * VOSPI_PACKET_SIZE];
         header = packet[1] | packet[0] << 8;
 
-        /* XXX if first bit of buffer is set, trigger a reset */
-
-        if ((header & 0x0F00) == 0x0F00) {
+        if ((header & 0x8000) == 0x8000) {
+            // First bit of header shouldn't be set for any valid header.
+            debug("first bit set on header [offset %d]", i);
+            return 1;
+        } else if ((header & 0x0F00) == 0x0F00) {
             state = STATE_INVALID;
             invalid++;
         } else {
             pkt_num = header & 0x0FFF;
             if (pkt_num > 60) {
-                debug("invalid packet number: %d", pkt_num);
-                state = STATE_INVALID_PKTNUM;
-                invalid_pktnum++;
+                debug("invalid packet number: %d [offset %d]", pkt_num, i);
                 return 1;
             } else {
                 state = STATE_VALID;
@@ -151,30 +147,28 @@ int transfer(int fd)
                 debug("invalid: %d", invalid);
                 invalid = 0;
                 break;
-            case STATE_INVALID_PKTNUM:
-                debug("invalid packet numbers: %d", invalid_pktnum);
-                invalid_pktnum = 0;
-                break;
             }
             last_state = state;
         }
 
         if (state == STATE_VALID) {
-            if (pkt_num == 0 && last_pkt_num == 0) {
-                // XXX end of read?
-                debug("saw pkt 0 twice (%02x %02x %02x %02x)", packet[0], packet[1], packet[2], packet[3]);
-                return 1;
-            }
             if (pkt_num == last_pkt_num) {
-                debug("dup pkt %d", pkt_num);
-                return 1;
-            }
-            if (!is_valid_seq(last_pkt_num, pkt_num)) {
+                if (packet[2] == 0 && packet[3] == 0) {
+                    debug("dup pkt %d with zero CRC [offset %d]", pkt_num, i);
+                    return 1;
+                }
+                // This can be recoverable so best not to trigger a reset.
+                debug("dup pkt %d [offset %d]", pkt_num, i);
+                return 0;
+            } else if (!is_valid_seq(last_pkt_num, pkt_num)) {
                 if (last_pkt_num != -1) {
                     debug("saw packets: 0-%d", last_pkt_num);
                 }
-                debug("pkts out of sequence: %d, previous %d", pkt_num, last_pkt_num);
-                return 1;
+                debug("pkts out of sequence: %d, previous %d [offset %d]", pkt_num, last_pkt_num, i);
+                // don't trigger reset if new segment has started
+                if (pkt_num != 0) {
+                    return 1;
+                }
             }
             last_pkt_num = pkt_num;
         }
@@ -240,13 +234,10 @@ int reset(int fd) {
     debug("reset!");
     close(fd);
 
-    invalid = 0;
-    invalid_pktnum = 0;
     last_pkt_num = -1;
     state = STATE_INVALID;
     last_state = -1;
-    transfer_count = 0;
-    last_good_count = 0;
+    invalid = 0;
 
     usleep(200 * 1000); // 200ms
     return spi_init();
